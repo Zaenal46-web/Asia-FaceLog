@@ -7,24 +7,24 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
-        Schema::create('shift_masters', function (Blueprint $table) {
+        Schema::create('holiday_calendars', function (Blueprint $table) {
             $table->id();
             $table->string('nama');
-            $table->string('kode')->unique();
-            $table->time('jam_masuk');
-            $table->time('jam_pulang');
-            $table->boolean('lintas_hari')->default(false);
-            $table->boolean('sabtu_aktif')->default(true);
-            $table->boolean('minggu_aktif')->default(false);
+            $table->string('tipe'); // national, company, category_specific
+            $table->date('tanggal_mulai');
+            $table->date('tanggal_selesai');
+            $table->text('keterangan')->nullable();
             $table->boolean('is_active')->default(true);
             $table->timestamps();
 
+            $table->index(['tanggal_mulai', 'tanggal_selesai']);
+            $table->index('tipe');
             $table->index('is_active');
         });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('shift_masters');
+        Schema::dropIfExists('holiday_calendars');
     }
 };
