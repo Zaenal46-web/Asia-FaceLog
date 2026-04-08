@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 
 class User extends Authenticatable
 {
@@ -53,4 +54,9 @@ class User extends Authenticatable
     {
         return $this->role?->code === 'hrd_outsourcing';
     }
+
+    public function hasRole(string $code): bool
+{
+    return $this->role?->code === $code;
+}
 }
