@@ -191,24 +191,31 @@ class FingerUserController extends Controller
     }
 
     public function pushSetUserinfo(FingerspotUser $userMesin, FingerApiService $api)
-    {
-        if (! $userMesin->device) {
-            return back()->with('error', 'User mesin belum terhubung dengan device.');
-        }
-
-        $result = $api->setUserinfo($userMesin->device, [
-            'pin' => $userMesin->pin,
-            'nama' => $userMesin->nama,
-            'privilege' => $userMesin->privilege,
-            'password' => $userMesin->password,
-            'rfid' => $userMesin->rfid,
-            'face_template_count' => $userMesin->face_template_count,
-            'finger_template_count' => $userMesin->finger_template_count,
-            'vein_template_count' => $userMesin->vein_template_count,
-        ]);
-
-        return back()->with($result['ok'] ? 'success' : 'error', $result['message']);
+{
+    if (! $userMesin->device) {
+        return back()->with('error', 'User mesin belum terhubung dengan device.');
     }
+
+    $payload = [
+        'pin' => $userMesin->pin,
+        'name' => $userMesin->api_name ?? $userMesin->nama,
+        'privilege' => $userMesin->api_privilege ?? $userMesin->privilege,
+        'password' => $userMesin->api_password ?? $userMesin->password,
+        'rfid' => $userMesin->api_rfid ?? $userMesin->rfid,
+    ];
+
+    // hanya kirim template + count biometrik kalau memang ada template valid
+    if ($userMesin->template) {
+        $payload['face'] = $userMesin->api_face;
+        $payload['finger'] = $userMesin->api_finger;
+        $payload['vein'] = $userMesin->api_vein;
+        $payload['template'] = $userMesin->template;
+    }
+
+    $result = $api->setUserinfo($userMesin->device, $payload);
+
+    return back()->with($result['ok'] ? 'success' : 'error', $result['message']);
+}
 
     public function deleteFromDevice(FingerspotUser $userMesin, FingerApiService $api)
     {

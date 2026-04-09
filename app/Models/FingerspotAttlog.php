@@ -22,7 +22,7 @@ class FingerspotAttlog extends Model
     ];
 
     protected $casts = [
-        'scan_time' => 'datetime',
+        'raw' => 'array',
     ];
 
     public function device(): BelongsTo

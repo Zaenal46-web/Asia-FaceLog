@@ -95,7 +95,7 @@
                                         <td class="px-4 py-3 text-sm font-medium text-slate-800">{{ $log->pin }}</td>
                                         <td class="px-4 py-3 text-sm text-slate-600">{{ $log->device?->nama ?? '-' }}</td>
                                         <td class="px-4 py-3 text-sm text-slate-600">
-                                            {{ optional($log->scan_time)->timezone('Asia/Jakarta')->format('d-m-Y H:i:s') }}
+                                            {{ $log->scan_time ? \Carbon\Carbon::createFromFormat('Y-m-d H:i:s', $log->scan_time)->format('d-m-Y H:i:s') : '-' }}
                                         </td>
                                     </tr>
                                 @empty
