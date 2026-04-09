@@ -10,6 +10,8 @@ use App\Http\Controllers\Master\KategoriKaryawanController;
 use App\Http\Controllers\Master\KategoriShiftController;
 use App\Http\Controllers\Master\KaryawanController;
 use App\Http\Controllers\Master\ShiftMasterController;
+use App\Http\Controllers\ExportController;
+use App\Http\Controllers\HolidayCalendarController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\AbsensiController;
 use Illuminate\Support\Facades\Auth;
@@ -66,8 +68,16 @@ Route::middleware(['auth'])->group(function () {
         ->middleware('role:superadmin')
         ->name('absensi.proses');
 
-    Route::view('/export', 'export.index')->name('export.index');
-    Route::view('/holiday', 'holiday.index')->name('holiday.index');
+    Route::get('/export', [ExportController::class, 'index'])->name('export.index');
+    Route::get('/export/download-xlsx', [ExportController::class, 'downloadXlsx'])->name('export.download-xlsx');
+
+    Route::get('/holiday', [HolidayCalendarController::class, 'index'])->name('holiday.index');
+    Route::get('/holiday/create', [HolidayCalendarController::class, 'create'])->name('holiday.create');
+    Route::post('/holiday', [HolidayCalendarController::class, 'store'])->name('holiday.store');
+    Route::get('/holiday/{holiday}/edit', [HolidayCalendarController::class, 'edit'])->name('holiday.edit');
+    Route::put('/holiday/{holiday}', [HolidayCalendarController::class, 'update'])->name('holiday.update');
+    Route::delete('/holiday/{holiday}', [HolidayCalendarController::class, 'destroy'])->name('holiday.destroy');
+    //Route::view('/holiday', 'holiday.index')->name('holiday.index');
 });
 
     /*
@@ -110,6 +120,18 @@ Route::middleware(['auth'])->group(function () {
             ->names('master.user-mesin')
             ->parameters(['user-mesin' => 'userMesin'])
             ->except(['show']);
+
+        Route::get('/master/user-mesin/{userMesin}/mutasi', [FingerUserController::class, 'showMutasiForm'])
+            ->name('master.user-mesin.mutasi-form');
+
+        Route::post('/master/user-mesin/{userMesin}/mutasi', [FingerUserController::class, 'mutasiDevice'])
+            ->name('master.user-mesin.mutasi-device');
+
+        Route::get('/master/user-mesin/{userMesin}/mutasi', [FingerUserController::class, 'showMutasiForm'])
+            ->name('master.user-mesin.mutasi-form');
+
+        Route::post('/master/user-mesin/{userMesin}/mutasi', [FingerUserController::class, 'mutasiDevice'])
+            ->name('master.user-mesin.mutasi-device');
 
         /*
         |--------------------------------------------------------------------------

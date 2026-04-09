@@ -199,6 +199,11 @@
                                             </button>
                                         </form>
 
+                                        <a href="{{ route('master.user-mesin.mutasi-form', $item) }}"
+                                        class="inline-flex rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 hover:bg-violet-100">
+                                            Mutasi Device
+                                        </a>
+
                                         <form action="{{ route('master.user-mesin.destroy', $item) }}" method="POST" onsubmit='return confirm("Yakin ingin menghapus user mesin ini?")'>
                                             @csrf
                                             @method('DELETE')

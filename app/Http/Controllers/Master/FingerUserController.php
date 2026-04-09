@@ -7,6 +7,7 @@ use App\Models\FingerspotDevice;
 use App\Models\FingerspotUser;
 use App\Models\Karyawan;
 use App\Services\Fingerspot\FingerApiService;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
@@ -321,6 +322,121 @@ class FingerUserController extends Controller
             "Sync massal selesai. Dibuat: {$dibuat}, Dilewati: {$dilewati}, Tanpa PIN: {$tanpaPin}."
         );
     }
+
+    public function showMutasiForm(FingerspotUser $userMesin)
+{
+    $deviceOptions = FingerspotDevice::query()
+        ->where('id', '!=', $userMesin->device_id)
+        ->orderBy('nama')
+        ->get();
+
+    $konflikDevices = FingerspotUser::query()
+        ->where('pin', $userMesin->pin)
+        ->where('device_id', '!=', $userMesin->device_id)
+        ->with('device')
+        ->get();
+
+    return view('master.user-mesin.mutasi', compact('userMesin', 'deviceOptions', 'konflikDevices'));
+}
+
+public function mutasiDevice(Request $request, FingerspotUser $userMesin, FingerApiService $api)
+{
+    $validated = $request->validate([
+        'device_tujuan_id' => ['required', 'exists:fingerspot_devices,id', 'different:user_device_id'],
+        'pin_baru' => ['nullable', 'string', 'max:50'],
+        'hapus_dari_device_lama' => ['nullable', 'boolean'],
+        'update_master_karyawan' => ['nullable', 'boolean'],
+    ]);
+
+    $deviceAsal = $userMesin->device;
+    $deviceTujuan = FingerspotDevice::findOrFail($validated['device_tujuan_id']);
+
+    if (!$deviceAsal) {
+        return back()->with('error', 'Device asal user mesin tidak ditemukan.');
+    }
+
+    if ($deviceAsal->id === $deviceTujuan->id) {
+        return back()->with('error', 'Device tujuan harus berbeda dari device asal.');
+    }
+
+    if (!$userMesin->template) {
+        return back()->with('error', 'Template tidak ditemukan di raw_json. Jalankan Get Userinfo dulu sebelum mutasi.');
+    }
+
+    $pinTujuan = trim($validated['pin_baru'] ?: $userMesin->pin);
+
+    $existingTarget = FingerspotUser::query()
+        ->where('device_id', $deviceTujuan->id)
+        ->where('pin', $pinTujuan)
+        ->first();
+
+    if ($existingTarget) {
+        return back()->with('error', 'PIN ' . $pinTujuan . ' sudah dipakai di device tujuan oleh user lain. Gunakan PIN baru yang berbeda.');
+    }
+
+    $payload = [
+        'pin' => (string) $pinTujuan,
+        'name' => $userMesin->api_name,
+        'privilege' => $userMesin->api_privilege,
+        'password' => $userMesin->api_password,
+        'rfid' => $userMesin->api_rfid,
+        'face' => $userMesin->api_face,
+        'finger' => $userMesin->api_finger,
+        'vein' => $userMesin->api_vein,
+        'template' => $userMesin->template,
+    ];
+
+    DB::beginTransaction();
+
+    try {
+        $pushResult = $api->setUserinfo($deviceTujuan, $payload);
+
+        if (!($pushResult['ok'] ?? false)) {
+            DB::rollBack();
+            return back()->with('error', $pushResult['message'] ?? 'Mutasi gagal dikirim ke device tujuan.');
+        }
+
+        FingerspotUser::create([
+            'device_id' => $deviceTujuan->id,
+            'pin' => $pinTujuan,
+            'nama' => $userMesin->nama,
+            'privilege' => $userMesin->privilege,
+            'password' => $userMesin->password,
+            'rfid' => $userMesin->rfid,
+            'face_template_count' => $userMesin->face_template_count,
+            'finger_template_count' => $userMesin->finger_template_count,
+            'vein_template_count' => $userMesin->vein_template_count,
+            'raw_json' => $userMesin->raw_json,
+            'synced_at' => now(),
+        ]);
+
+        if ((bool) ($validated['update_master_karyawan'] ?? false)) {
+            Karyawan::query()
+                ->where('pin_fingerspot', $userMesin->pin)
+                ->update([
+                    'device_id' => $deviceTujuan->id,
+                    'pin_fingerspot' => $pinTujuan,
+                ]);
+        }
+
+        if ((bool) ($validated['hapus_dari_device_lama'] ?? false)) {
+            $deleteResult = $api->deleteUserinfo($deviceAsal, $userMesin->pin);
+
+            if ($deleteResult['ok'] ?? false) {
+                $userMesin->delete();
+            }
+        }
+
+        DB::commit();
+
+        return redirect()
+            ->route('master.user-mesin.index')
+            ->with('success', 'Mutasi user mesin berhasil ke device tujuan: ' . $deviceTujuan->nama . ' dengan PIN ' . $pinTujuan);
+    } catch (\Throwable $e) {
+        DB::rollBack();
+        return back()->with('error', 'Mutasi gagal: ' . $e->getMessage());
+    }
+}
 
     protected function validateForm(Request $request, ?int $ignoreId = null): array
     {
