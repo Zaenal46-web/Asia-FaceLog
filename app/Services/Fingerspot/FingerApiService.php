@@ -22,26 +22,42 @@ class FingerApiService
     }
 
     public function setUserinfo(FingerspotDevice $device, array $userData): array
-    {
-        $pin = trim((string) ($userData['pin'] ?? ''));
+{
+    $pin = trim((string) ($userData['pin'] ?? ''));
 
-        return $this->sendCommand(
-            device: $device,
-            action: 'set_userinfo',
-            payload: array_filter([
+    if ($pin === '') {
+        return [
+            'ok' => false,
+            'message' => 'PIN user kosong.',
+        ];
+    }
+
+    $name = $this->nullableTrim($userData['name'] ?? $userData['nama'] ?? null);
+
+    if (!$name) {
+        return [
+            'ok' => false,
+            'message' => 'Nama user kosong.',
+        ];
+    }
+
+    return $this->sendCommand(
+        device: $device,
+        action: 'set_userinfo',
+        payload: array_filter([
             'pin' => $pin,
-            'name' => $this->nullableTrim($userData['name'] ?? $userData['nama'] ?? null),
+            'name' => $name,
             'privilege' => $this->nullableTrim($userData['privilege'] ?? null),
             'password' => $this->nullableTrim($userData['password'] ?? null),
             'rfid' => $this->nullableTrim($userData['rfid'] ?? null),
-            'face' => isset($userData['face']) ? (int) $userData['face'] : (isset($userData['face_template_count']) ? (int) $userData['face_template_count'] : null),
-            'finger' => isset($userData['finger']) ? (int) $userData['finger'] : (isset($userData['finger_template_count']) ? (int) $userData['finger_template_count'] : null),
-            'vein' => isset($userData['vein']) ? (int) $userData['vein'] : (isset($userData['vein_template_count']) ? (int) $userData['vein_template_count'] : null),
+            'face' => isset($userData['face']) ? (int) $userData['face'] : null,
+            'finger' => isset($userData['finger']) ? (int) $userData['finger'] : null,
+            'vein' => isset($userData['vein']) ? (int) $userData['vein'] : null,
             'template' => $this->nullableTrim($userData['template'] ?? null),
         ], fn ($v) => $v !== null && $v !== ''),
-            pin: $pin,
-        );
-    }
+        pin: $pin,
+    );
+}
 
     public function deleteUserinfo(FingerspotDevice $device, string $pin): array
     {

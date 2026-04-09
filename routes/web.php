@@ -133,6 +133,12 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/master/user-mesin/{userMesin}/mutasi', [FingerUserController::class, 'mutasiDevice'])
             ->name('master.user-mesin.mutasi-device');
 
+        Route::get('/master/user-mesin/{userMesin}/set-userinfo', [FingerUserController::class, 'showSetUserinfoForm'])
+            ->name('master.user-mesin.set-userinfo-form');
+
+        Route::post('/master/user-mesin/{userMesin}/set-userinfo', [FingerUserController::class, 'submitSetUserinfo'])
+            ->name('master.user-mesin.set-userinfo-submit');
+
         /*
         |--------------------------------------------------------------------------
         | Device Actions (Outbound to Fingerspot API)

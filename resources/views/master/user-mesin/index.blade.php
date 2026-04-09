@@ -183,13 +183,10 @@
                                             </button>
                                         </form>
 
-                                        <form action="{{ route('master.user-mesin.push-set-userinfo', $item) }}" method="POST">
-                                            @csrf
-                                            <button type="submit"
-                                                    class="inline-flex rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100">
-                                                Set Userinfo
-                                            </button>
-                                        </form>
+                                        <a href="{{ route('master.user-mesin.set-userinfo-form', $item) }}"
+                                        class="inline-flex rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100">
+                                            Set Userinfo
+                                        </a>
 
                                         <form action="{{ route('master.user-mesin.delete-from-device', $item) }}" method="POST" onsubmit='return confirm("Yakin hapus user ini dari mesin?")'>
                                             @csrf

@@ -196,15 +196,23 @@ class FingerUserController extends Controller
         return back()->with('error', 'User mesin belum terhubung dengan device.');
     }
 
+    if (! $userMesin->pin) {
+        return back()->with('error', 'PIN user mesin kosong.');
+    }
+
+    if (! ($userMesin->api_name ?? $userMesin->nama)) {
+        return back()->with('error', 'Nama user mesin kosong. Isi dulu nama user sebelum push ke device.');
+    }
+
     $payload = [
-        'pin' => $userMesin->pin,
+        'pin' => (string) $userMesin->pin,
         'name' => $userMesin->api_name ?? $userMesin->nama,
-        'privilege' => $userMesin->api_privilege ?? $userMesin->privilege,
+        'privilege' => $userMesin->api_privilege ?? $userMesin->privilege ?? '0',
         'password' => $userMesin->api_password ?? $userMesin->password,
         'rfid' => $userMesin->api_rfid ?? $userMesin->rfid,
     ];
 
-    // hanya kirim template + count biometrik kalau memang ada template valid
+    // hanya kirim biometrik kalau template memang tersedia
     if ($userMesin->template) {
         $payload['face'] = $userMesin->api_face;
         $payload['finger'] = $userMesin->api_finger;
@@ -443,6 +451,61 @@ public function mutasiDevice(Request $request, FingerspotUser $userMesin, Finger
         DB::rollBack();
         return back()->with('error', 'Mutasi gagal: ' . $e->getMessage());
     }
+}
+
+public function showSetUserinfoForm(FingerspotUser $userMesin)
+{
+    $hasTemplate = !empty($userMesin->template);
+
+    return view('master.user-mesin.set-userinfo', compact('userMesin', 'hasTemplate'));
+}
+
+public function submitSetUserinfo(Request $request, FingerspotUser $userMesin, FingerApiService $api)
+{
+    if (! $userMesin->device) {
+        return back()->with('error', 'User mesin belum terhubung dengan device.');
+    }
+
+    $validated = $request->validate([
+        'nama' => ['required', 'string', 'max:255'],
+        'privilege' => ['nullable', 'string', 'max:50'],
+        'password' => ['nullable', 'string', 'max:255'],
+        'rfid' => ['nullable', 'string', 'max:255'],
+        'kirim_template' => ['nullable', 'boolean'],
+    ]);
+
+    $payload = [
+        'pin' => (string) $userMesin->pin,
+        'name' => $validated['nama'],
+        'privilege' => $validated['privilege'] ?? $userMesin->api_privilege ?? '0',
+        'password' => $validated['password'] ?? null,
+        'rfid' => $validated['rfid'] ?? null,
+    ];
+
+    $kirimTemplate = (bool) ($validated['kirim_template'] ?? false);
+
+    if ($kirimTemplate && $userMesin->template) {
+        $payload['face'] = $userMesin->api_face;
+        $payload['finger'] = $userMesin->api_finger;
+        $payload['vein'] = $userMesin->api_vein;
+        $payload['template'] = $userMesin->template;
+    }
+
+    $result = $api->setUserinfo($userMesin->device, $payload);
+
+    if ($result['ok'] ?? false) {
+        $userMesin->update([
+            'nama' => $validated['nama'],
+            'privilege' => $validated['privilege'] ?? $userMesin->privilege,
+            'password' => $validated['password'] ?? $userMesin->password,
+            'rfid' => $validated['rfid'] ?? $userMesin->rfid,
+            'synced_at' => now(),
+        ]);
+    }
+
+    return redirect()
+        ->route('master.user-mesin.index')
+        ->with($result['ok'] ? 'success' : 'error', $result['message']);
 }
 
     protected function validateForm(Request $request, ?int $ignoreId = null): array
