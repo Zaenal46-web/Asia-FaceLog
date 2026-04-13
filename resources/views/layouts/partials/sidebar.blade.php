@@ -122,6 +122,15 @@
                             <span>Raw Log</span>
                         </a>
 
+                        <a href="{{ route('integrasi.sinkronisasi-log.create') }}"
+                        class="group flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition
+                        {{ request()->routeIs('integrasi.sinkronisasi-log.*') ? 'bg-white/15 text-white shadow-sm' : 'text-blue-100 hover:bg-white/10 hover:text-white' }}">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3M19.5 12a7.5 7.5 0 0 1-12.8 5.3M16.5 4.5v3h-3M7.5 19.5v-3h3" />
+                            </svg>
+                            <span>Sinkronisasi Log</span>
+                        </a>
+
                         <a href="{{ route('integrasi.webhook-log.index') }}" class="flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition {{ $navClass('integrasi.webhook-log.index') }}">
                             <span>Webhook Log</span>
                         </a>

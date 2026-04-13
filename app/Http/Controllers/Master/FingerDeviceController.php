@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Master;
 
 use App\Http\Controllers\Controller;
 use App\Models\FingerspotDevice;
+use App\Services\Fingerspot\AttlogIngestService;
 use App\Services\Fingerspot\FingerApiService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -166,116 +167,107 @@ class FingerDeviceController extends Controller
         return back()->with($result['ok'] ? 'success' : 'error', $result['message']);
     }
 
-    public function getAttlogFromApi(Request $request, FingerspotDevice $device, FingerApiService $api)
-{
-    $validated = $request->validate([
-        'start_date' => ['required', 'date'],
-        'end_date' => ['required', 'date', 'after_or_equal:start_date'],
-    ]);
-
-    $startDate = $validated['start_date'];
-    $endDate = $validated['end_date'];
-
-    $diffDays = \Carbon\Carbon::parse($startDate)->diffInDays(\Carbon\Carbon::parse($endDate));
-
-    if ($diffDays > 1) {
-        return back()->with('error', 'Range Get Attlog maksimal 2 hari per request.');
-    }
-
-    $result = $api->getAttlog($device, $startDate, $endDate);
-
-    if (!($result['ok'] ?? false)) {
-        return back()->with('error', $result['message'] ?? 'Get Attlog gagal.');
-    }
-
-    $response = $result['response'] ?? [];
-
-    \Log::info('GetAttlog API Response', [
-        'device_id' => $device->id,
-        'device_name' => $device->nama ?? null,
-        'start_date' => $startDate,
-        'end_date' => $endDate,
-        'response' => $response,
-    ]);
-
-    if (is_string($response)) {
-        $decoded = json_decode($response, true);
-        if (json_last_error() === JSON_ERROR_NONE) {
-            $response = $decoded;
-        }
-    }
-
-    $rows = [];
-
-    if (is_array($response)) {
-        if (isset($response['data']) && is_array($response['data'])) {
-            $rows = $response['data'];
-        } elseif (isset($response['attlog']) && is_array($response['attlog'])) {
-            $rows = $response['attlog'];
-        } elseif (isset($response['rows']) && is_array($response['rows'])) {
-            $rows = $response['rows'];
-        } elseif (isset($response[0]) && is_array($response[0])) {
-            $rows = $response;
-        }
-    }
-
-    if (empty($rows)) {
-        return back()->with('error', 'Get Attlog berhasil dipanggil, tetapi data scan tidak ditemukan pada response API. Cek laravel.log.');
-    }
-
-    $inserted = 0;
-    $skipped = 0;
-
-    foreach ($rows as $row) {
-        $pin = (string) ($row['pin'] ?? '');
-        $scan = $row['scan_date'] ?? $row['scan'] ?? $row['scan_time'] ?? null;
-
-        if ($pin === '' || !$scan) {
-            $skipped++;
-            continue;
-        }
-
-        $exists = \App\Models\FingerspotAttlog::query()
-            ->where('device_id', $device->id)
-            ->where('pin', $pin)
-            ->where('scan_time', $scan)
-            ->exists();
-
-        if ($exists) {
-            $skipped++;
-            continue;
-        }
-
-        \App\Models\FingerspotAttlog::create([
-            'device_id' => $device->id,
-            'pin' => $pin,
-            'device_sn' => $row['device_sn'] ?? $device->serial_number ?? null,
-            'scan_time' => $scan,
-            'verify_mode' => $row['verify'] ?? $row['verify_mode'] ?? null,
-            'status_scan' => $row['status_scan'] ?? $row['status'] ?? null,
-            'photo_url' => $row['photo_url'] ?? null,
-            'raw' => $row,
+    public function getAttlogFromApi(
+        Request $request,
+        FingerspotDevice $device,
+        FingerApiService $api,
+        AttlogIngestService $ingestService
+    ) {
+        $validated = $request->validate([
+            'start_date' => ['required', 'date'],
+            'end_date' => ['required', 'date', 'after_or_equal:start_date'],
         ]);
 
-        $inserted++;
-    }
+        $startDate = $validated['start_date'];
+        $endDate = $validated['end_date'];
 
-    return back()->with(
-        'success',
-        "Get Attlog selesai. Data baru: {$inserted}. Dilewati: {$skipped}."
-    );
-}
+        $diffDays = \Carbon\Carbon::parse($startDate)->diffInDays(\Carbon\Carbon::parse($endDate));
+
+        if ($diffDays > 1) {
+            return back()->with('error', 'Range Get Attlog maksimal 2 hari per request.');
+        }
+
+        $result = $api->getAttlog($device, $startDate, $endDate);
+
+        if (! ($result['ok'] ?? false)) {
+            return back()->with('error', $result['message'] ?? 'Get Attlog gagal.');
+        }
+
+        $response = $result['response'] ?? [];
+
+        \Log::info('GetAttlog raw response', [
+            'device_id' => $device->id,
+            'device_name' => $device->nama ?? null,
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'response' => $response,
+        ]);
+
+        if (is_string($response)) {
+            $decoded = json_decode($response, true);
+            if (json_last_error() === JSON_ERROR_NONE) {
+                $response = $decoded;
+            }
+        }
+
+        if (! is_array($response)) {
+            return back()->with('error', 'Response Get Attlog bukan array yang valid. Cek laravel.log.');
+        }
+
+        $rows = $this->extractAttlogRows($response);
+
+        if (empty($rows)) {
+            \Log::warning('GetAttlog rows empty after extract', [
+                'device_id' => $device->id,
+                'response' => $response,
+            ]);
+
+            return back()->with('error', 'Get Attlog berhasil dipanggil, tetapi data scan tidak ditemukan pada response API. Cek laravel.log.');
+        }
+
+        $syncBatch = 'get_attlog:' . $device->id . ':' . now()->format('YmdHis');
+
+        $summary = $ingestService->ingestMany(
+            device: $device,
+            rows: $rows,
+            sourceChannel: 'get_attlog',
+            vendorTransId: $response['trans_id'] ?? null,
+            syncBatch: $syncBatch,
+            receivedAt: now(),
+        );
+
+        \Log::info('GetAttlog summary', [
+            'device_id' => $device->id,
+            'device_name' => $device->nama ?? null,
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'total_rows_extracted' => count($rows),
+            'inserted' => $summary['inserted'],
+            'duplicate' => $summary['duplicate'],
+            'invalid' => $summary['invalid'],
+            'invalid_samples' => $summary['invalid_samples'],
+            'duplicate_samples' => $summary['duplicate_samples'],
+            'vendor_trans_id' => $response['trans_id'] ?? null,
+            'sync_batch' => $syncBatch,
+        ]);
+
+        return back()->with(
+            'success',
+            "Get Attlog selesai. Total response: " . count($rows)
+            . ". Data baru: {$summary['inserted']}. Duplicate: {$summary['duplicate']}. Invalid: {$summary['invalid']}."
+        );
+    }
 
     protected function nullableTrim(?string $value): ?string
-{
-    if ($value === null) {
-        return null;
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $value = trim($value);
+
+        return $value === '' ? null : $value;
     }
-
-    $value = trim($value);
-
-    return $value === '' ? null : $value;
-}
 
     protected function timezones(): array
     {
@@ -284,5 +276,75 @@ class FingerDeviceController extends Controller
             'Asia/Makassar',
             'Asia/Jayapura',
         ];
+    }
+
+    protected function extractAttlogRows(array $response): array
+    {
+        $candidates = [
+            $response['data'] ?? null,
+            $response['attlog'] ?? null,
+            $response['rows'] ?? null,
+            $response['response']['data'] ?? null,
+            $response['response']['attlog'] ?? null,
+            $response['payload']['data'] ?? null,
+            $response['payload']['attlog'] ?? null,
+            $response['data']['data'] ?? null,
+            $response['data']['attlog'] ?? null,
+            $response['data']['rows'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if ($this->isListOfAttlogs($candidate)) {
+                return $candidate;
+            }
+        }
+
+        $found = $this->findAttlogListRecursive($response);
+
+        return $found ?? [];
+    }
+
+    protected function isListOfAttlogs($value): bool
+    {
+        if (! is_array($value) || empty($value)) {
+            return false;
+        }
+
+        if (! array_is_list($value)) {
+            return false;
+        }
+
+        $first = $value[0] ?? null;
+
+        if (! is_array($first)) {
+            return false;
+        }
+
+        return array_key_exists('pin', $first)
+            || array_key_exists('scan_date', $first)
+            || array_key_exists('scan', $first)
+            || array_key_exists('scan_time', $first);
+    }
+
+    protected function findAttlogListRecursive($value): ?array
+    {
+        if (! is_array($value)) {
+            return null;
+        }
+
+        if ($this->isListOfAttlogs($value)) {
+            return $value;
+        }
+
+        foreach ($value as $child) {
+            if (is_array($child)) {
+                $found = $this->findAttlogListRecursive($child);
+                if ($found !== null) {
+                    return $found;
+                }
+            }
+        }
+
+        return null;
     }
 }

@@ -2,16 +2,19 @@
 
 namespace App\Services\Fingerspot;
 
-use App\Models\FingerspotAttlog;
 use App\Models\FingerspotDevice;
 use App\Models\FingerspotUser;
 use App\Models\FingerspotWebhookLog;
 use App\Models\Karyawan;
-use Carbon\Carbon;
 use Illuminate\Support\Facades\Log;
 
 class FingerWebhookService
 {
+    public function __construct(
+        protected AttlogIngestService $attlogIngestService
+    ) {
+    }
+
     public function handle(array $payload): void
     {
         $type = (string) ($payload['type'] ?? '');
@@ -40,6 +43,7 @@ class FingerWebhookService
             Log::warning('Webhook cloud_id tidak terdaftar di fingerspot_devices', [
                 'cloud_id' => $cloudId,
                 'type' => $type,
+                'payload' => $payload,
             ]);
 
             $webhookLog->update([
@@ -90,32 +94,42 @@ class FingerWebhookService
     protected function handleAttlog(FingerspotDevice $device, array $data, array $payload): void
     {
         $pin = $this->stringOrNull($data['pin'] ?? null);
-        $scan = $this->stringOrNull($data['scan'] ?? null);
+        $scan = $this->stringOrNull($data['scan'] ?? $data['scan_date'] ?? $data['scan_time'] ?? null);
 
         if (! $pin || ! $scan) {
             throw new \RuntimeException('Payload attlog tidak memiliki pin/scan yang valid');
         }
 
-        try {
-            $scanTime = Carbon::parse($scan);
-        } catch (\Throwable $e) {
-            throw new \RuntimeException('Format scan_time attlog tidak valid');
-        }
+        $row = [
+            'pin' => $pin,
+            'scan_date' => $scan, // simpan apa adanya, jangan parse Carbon agar tidak lompat jam
+            'device_sn' => $this->stringOrNull($payload['cloud_id'] ?? $data['device_sn'] ?? $device->serial_number),
+            'verify' => $this->stringOrNull($data['verify'] ?? $data['verify_mode'] ?? null),
+            'status_scan' => $this->stringOrNull($data['status_scan'] ?? $data['status'] ?? null),
+            'photo_url' => $this->stringOrNull($data['photo_url'] ?? null),
+        ];
 
-        FingerspotAttlog::firstOrCreate(
-            [
-                'device_id' => $device->id,
-                'pin' => $pin,
-                'scan_time' => $scanTime->format('Y-m-d H:i:s'),
-            ],
-            [
-                'device_sn' => $this->stringOrNull($payload['cloud_id'] ?? $data['device_sn'] ?? $device->serial_number),
-                'verify_mode' => $this->stringOrNull($data['verify'] ?? $data['verify_mode'] ?? null),
-                'status_scan' => $this->stringOrNull($data['status_scan'] ?? $data['status'] ?? null),
-                'photo_url' => $this->stringOrNull($data['photo_url'] ?? null),
-                'raw' => $this->toJson($payload),
-            ]
+        $result = $this->attlogIngestService->ingestRow(
+            device: $device,
+            row: $row,
+            sourceChannel: 'webhook',
+            vendorTransId: $this->stringOrNull($payload['trans_id'] ?? null),
+            syncBatch: 'webhook:' . $device->id . ':' . now()->format('YmdHis'),
+            receivedAt: now(),
         );
+
+        Log::info('Webhook attlog processed', [
+            'device_id' => $device->id,
+            'cloud_id' => $payload['cloud_id'] ?? null,
+            'trans_id' => $payload['trans_id'] ?? null,
+            'result' => $result,
+            'scan_time_from_payload' => $scan,
+            'received_at' => now()->format('Y-m-d H:i:s'),
+        ]);
+
+        if (($result['status'] ?? null) === 'invalid') {
+            throw new \RuntimeException($result['message'] ?? 'Attlog webhook invalid');
+        }
     }
 
     protected function handleGetUserinfo(FingerspotDevice $device, array $data, array $payload): void
@@ -219,12 +233,12 @@ class FingerWebhookService
 
     protected function handleSetTime(FingerspotDevice $device, array $data, array $payload): void
     {
-        // Saat ini cukup dicatat di webhook log saja.
+        // cukup audit di webhook log
     }
 
     protected function handleRegisterOnline(FingerspotDevice $device, array $data, array $payload): void
     {
-        // Saat ini cukup dicatat di webhook log saja.
+        // cukup audit di webhook log
     }
 
     protected function handleUnknownType(FingerspotDevice $device, string $type, array $payload): void
@@ -232,12 +246,12 @@ class FingerWebhookService
         Log::info('Webhook type tidak dikenali, disimpan untuk audit', [
             'device_id' => $device->id,
             'type' => $type,
+            'payload' => $payload,
         ]);
     }
 
     protected function tryAutoMapKaryawanByPinOrNama(FingerspotUser $user, FingerspotDevice $device): void
     {
-        // 1. kalau ada karyawan yang pin_fingerspot sama, tempelkan device jika kosong
         $karyawanByPin = Karyawan::query()
             ->where('pin_fingerspot', $user->pin)
             ->first();
@@ -252,7 +266,6 @@ class FingerWebhookService
             return;
         }
 
-        // 2. kalau pin belum ketemu, coba cocokkan nama
         if (! $user->nama) {
             return;
         }

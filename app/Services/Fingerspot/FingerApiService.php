@@ -81,14 +81,14 @@ class FingerApiService
         );
     }
 
-    public function getAttlog(FingerspotDevice $device, string $startDate, string $endDate): array
+        public function getAttlog(FingerspotDevice $device, string $startDate, string $endDate): array
     {
         return $this->sendCommand(
             device: $device,
             action: 'get_attlog',
             payload: [
-                'start_date' => $startDate,
-                'end_date' => $endDate,
+                'start_date' => $startDate . ' 00:00:00',
+                'end_date' => $endDate . ' 23:59:59',
             ],
             pin: null,
         );

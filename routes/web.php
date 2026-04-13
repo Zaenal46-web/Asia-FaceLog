@@ -14,6 +14,7 @@ use App\Http\Controllers\ExportController;
 use App\Http\Controllers\HolidayCalendarController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\AbsensiController;
+use App\Http\Controllers\Master\FingerAttlogImportController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 
@@ -120,6 +121,19 @@ Route::middleware(['auth'])->group(function () {
             ->names('master.user-mesin')
             ->parameters(['user-mesin' => 'userMesin'])
             ->except(['show']);
+
+        Route::prefix('integrasi')->name('integrasi.')->group(function () {
+        Route::get('/sinkronisasi-log', [FingerAttlogImportController::class, 'create'])
+            ->name('sinkronisasi-log.create');
+
+        Route::post('/sinkronisasi-log/import-excel', [FingerAttlogImportController::class, 'store'])
+            ->name('sinkronisasi-log.import-excel');
+
+        Route::post('/sinkronisasi-log/get-attlog/{device}', [FingerDeviceController::class, 'getAttlogFromApi'])
+            ->name('sinkronisasi-log.get-attlog');
+    });
+
+    
 
         Route::get('/master/user-mesin/{userMesin}/mutasi', [FingerUserController::class, 'showMutasiForm'])
             ->name('master.user-mesin.mutasi-form');

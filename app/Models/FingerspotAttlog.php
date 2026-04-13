@@ -18,11 +18,16 @@ class FingerspotAttlog extends Model
         'verify_mode',
         'status_scan',
         'photo_url',
+        'source_channel',
+        'received_at',
+        'vendor_trans_id',
+        'sync_batch',
         'raw',
     ];
 
     protected $casts = [
         'raw' => 'array',
+        'received_at' => 'datetime',
     ];
 
     public function device(): BelongsTo

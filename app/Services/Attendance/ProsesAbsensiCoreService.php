@@ -267,8 +267,8 @@ class ProsesAbsensiCoreService
             $jamMasuk = $allShiftLogs->first();
         }
 
-        if (! $jamPulang && $allShiftLogs->count() > 1) {
-            $jamPulang = $allShiftLogs->last();
+        if (! $jamPulang) {
+            $jamPulang = null;
         }
 
         if ($jamMasuk && $jamPulang) {
@@ -396,7 +396,7 @@ if ($jamPulang && $singleScanMode !== 'masuk') {
                 'kategori_shift_id' => $rule->id,
                 'shift_master_id' => $shift->id,
                 'jam_masuk' => $jamMasuk?->format('H:i:s'),
-                'jam_masuk' => $jamMasuk?->format('H:i:s'),
+                'jam_pulang' => $jamPulang?->format('H:i:s'),
                 'status_telat' => $statusTelat,
                 'menit_telat' => $menitTelat,
                 'status_lembur' => $statusLembur,
