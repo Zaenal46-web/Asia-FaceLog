@@ -19,7 +19,7 @@ class KaryawanController extends Controller
         $status = trim((string) $request->get('status', ''));
         $kelengkapan = trim((string) $request->get('kelengkapan', ''));
 
-        $query = Karyawan::query()
+        $baseQuery = Karyawan::query()
             ->with(['kategoriKaryawan.parent', 'device'])
             ->when($search !== '', function ($q) use ($search) {
                 $q->where(function ($sub) use ($search) {
@@ -92,10 +92,12 @@ class KaryawanController extends Controller
                         $sub->whereNull('status_kerja')->orWhere('status_kerja', '');
                     });
                 }
-            })
-            ->latest();
+            });
 
-        $items = $query->paginate(12)->withQueryString();
+        $items = (clone $baseQuery)
+            ->latest()
+            ->paginate(12)
+            ->withQueryString();
 
         $kategoriOptions = KategoriKaryawan::query()
             ->orderBy('urutan')
@@ -106,14 +108,16 @@ class KaryawanController extends Controller
             ->orderBy('nama')
             ->get();
 
-        $totalKaryawan = Karyawan::count();
-        $totalActive = Karyawan::where('is_active', true)->count();
-        $totalWithPin = Karyawan::whereNotNull('pin_fingerspot')->where('pin_fingerspot', '!=', '')->count();
-        $totalWithoutPin = Karyawan::where(function ($q) {
+        $summaryQuery = clone $baseQuery;
+
+        $totalKaryawan = (clone $summaryQuery)->count();
+        $totalActive = (clone $summaryQuery)->where('is_active', true)->count();
+        $totalWithPin = (clone $summaryQuery)->whereNotNull('pin_fingerspot')->where('pin_fingerspot', '!=', '')->count();
+        $totalWithoutPin = (clone $summaryQuery)->where(function ($q) {
             $q->whereNull('pin_fingerspot')->orWhere('pin_fingerspot', '');
         })->count();
 
-        $totalLengkap = Karyawan::query()
+        $totalLengkap = (clone $summaryQuery)
             ->whereNotNull('kategori_karyawan_id')
             ->where(function ($q) {
                 $q->whereNotNull('jabatan')->where('jabatan', '!=', '');
@@ -124,7 +128,7 @@ class KaryawanController extends Controller
             })
             ->count();
 
-        $totalBelumLengkap = Karyawan::query()
+        $totalBelumLengkap = (clone $summaryQuery)
             ->where(function ($q) {
                 $q->whereNull('kategori_karyawan_id')
                     ->orWhereNull('tanggal_masuk')
