@@ -20,13 +20,19 @@ class AbsensiController extends Controller
 
         $query = AbsensiHarian::query()
             ->with(['karyawan.kategoriKaryawan', 'device', 'shiftMaster'])
+            ->whereHas('karyawan', function ($q) {
+                $q->whereNotNull('kategori_karyawan_id');
+            })
             ->whereDate('tanggal', $tanggal)
             ->when($deviceId, fn ($q) => $q->where('device_id', $deviceId))
             ->when($shiftId, fn ($q) => $q->where('shift_master_id', $shiftId))
             ->when($search !== '', function ($q) use ($search) {
                 $q->whereHas('karyawan', function ($sub) use ($search) {
-                    $sub->where('nama', 'like', "%{$search}%")
-                        ->orWhere('pin_fingerspot', 'like', "%{$search}%");
+                    $sub->whereNotNull('kategori_karyawan_id')
+                        ->where(function ($qq) use ($search) {
+                            $qq->where('nama', 'like', "%{$search}%")
+                               ->orWhere('pin_fingerspot', 'like', "%{$search}%");
+                        });
                 });
             })
             ->orderBy('jam_masuk')
@@ -43,6 +49,9 @@ class AbsensiController extends Controller
             ->get();
 
         $summaryQuery = AbsensiHarian::query()
+            ->whereHas('karyawan', function ($q) {
+                $q->whereNotNull('kategori_karyawan_id');
+            })
             ->whereDate('tanggal', $tanggal)
             ->when($deviceId, fn ($q) => $q->where('device_id', $deviceId))
             ->when($shiftId, fn ($q) => $q->where('shift_master_id', $shiftId));

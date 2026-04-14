@@ -18,14 +18,15 @@ class ProsesAbsensiCoreService
         $tanggal = Carbon::parse($tanggal)->toDateString();
 
         $karyawans = Karyawan::query()
-            ->where('is_active', true)
-            ->whereNotNull('pin_fingerspot')
-            ->where('pin_fingerspot', '!=', '')
-            ->when($deviceId, fn ($q) => $q->where('device_id', $deviceId))
-            ->get();
+        ->where('is_active', true)
+        ->whereNotNull('pin_fingerspot')
+        ->where('pin_fingerspot', '!=', '')
+        ->whereNotNull('kategori_karyawan_id')
+        ->when($deviceId, fn ($q) => $q->where('device_id', $deviceId))
+        ->get();
 
         $processed = 0;
-        $upserted  = 0;
+        $upserted = 0;
         $skippedManual = 0;
         $noRule = 0;
         $noScan = 0;
@@ -45,18 +46,38 @@ class ProsesAbsensiCoreService
                     continue;
                 }
 
-                $kategoriShiftRules = $this->getKategoriShiftRules($karyawan);
+                $logs = $this->getRelevantLogs($karyawan, $tanggal, $deviceId);
+                $kategoriShiftRules = $this->getKategoriShiftRules($karyawan, $tanggal);
 
                 if ($kategoriShiftRules->isEmpty()) {
                     $noRule++;
+
+                    $this->upsertAbsensi(
+                        $karyawan,
+                        $tanggal,
+                        null,
+                        $logs,
+                        $existing,
+                        'Tidak ada rule shift aktif pada hari ini.'
+                    );
+
+                    $processed++;
+                    $upserted++;
                     continue;
                 }
 
-                $logs = $this->getRelevantLogs($karyawan, $tanggal, $deviceId);
-
                 if ($logs->isEmpty()) {
                     $noScan++;
-                    $this->upsertAbsensi($karyawan, $tanggal, null, collect(), $existing);
+
+                    $this->upsertAbsensi(
+                        $karyawan,
+                        $tanggal,
+                        null,
+                        collect(),
+                        $existing,
+                        'Tidak ada scan pada range yang relevan.'
+                    );
+
                     $processed++;
                     $upserted++;
                     continue;
@@ -66,7 +87,16 @@ class ProsesAbsensiCoreService
 
                 if (! $bestMatch) {
                     $unmatched++;
-                    $this->upsertAbsensi($karyawan, $tanggal, null, $logs, $existing);
+
+                    $this->upsertAbsensi(
+                        $karyawan,
+                        $tanggal,
+                        null,
+                        $logs,
+                        $existing,
+                        'Tidak ditemukan rule shift yang cocok dari scan yang tersedia.'
+                    );
+
                     $processed++;
                     $upserted++;
                     continue;
@@ -104,18 +134,21 @@ class ProsesAbsensiCoreService
     protected function getRelevantLogs(Karyawan $karyawan, string $tanggal, ?int $deviceId = null): Collection
     {
         $start = Carbon::parse($tanggal)->subDay()->startOfDay();
-        $end   = Carbon::parse($tanggal)->addDay()->endOfDay();
+        $end = Carbon::parse($tanggal)->addDay()->endOfDay();
 
         return FingerspotAttlog::query()
             ->where('pin', (string) $karyawan->pin_fingerspot)
             ->when($deviceId, fn ($q) => $q->where('device_id', $deviceId))
             ->when(! $deviceId && $karyawan->device_id, fn ($q) => $q->where('device_id', $karyawan->device_id))
-            ->whereBetween('scan_time', [$start, $end])
+            ->whereBetween('scan_time', [
+                $start->format('Y-m-d H:i:s'),
+                $end->format('Y-m-d H:i:s'),
+            ])
             ->orderBy('scan_time')
             ->get();
     }
 
-    protected function getKategoriShiftRules(Karyawan $karyawan): Collection
+    protected function getKategoriShiftRules(Karyawan $karyawan, string $tanggal): Collection
     {
         if (! $karyawan->kategori_karyawan_id) {
             return collect();
@@ -123,7 +156,7 @@ class ProsesAbsensiCoreService
 
         $kategoriIds = $this->getKategoriLineageIds($karyawan->kategori_karyawan_id);
 
-        return KategoriShift::query()
+        $rules = KategoriShift::query()
             ->with('shiftMaster')
             ->where('is_active', true)
             ->whereIn('kategori_karyawan_id', $kategoriIds)
@@ -131,6 +164,32 @@ class ProsesAbsensiCoreService
             ->orderByDesc('is_default')
             ->orderBy('id')
             ->get();
+
+        return $rules->filter(function (KategoriShift $rule) use ($tanggal) {
+            return $this->isRuleActiveOnDate($rule, $tanggal);
+        })->values();
+    }
+
+    protected function isRuleActiveOnDate(KategoriShift $rule, string $tanggal): bool
+    {
+        $shift = $rule->shiftMaster;
+
+        if (! $shift || ! $shift->is_active) {
+            return false;
+        }
+
+        $date = Carbon::parse($tanggal);
+        $day = $date->dayOfWeekIso; // 1=Senin ... 6=Sabtu, 7=Minggu
+
+        if ($day === 6) {
+            return (bool) $shift->sabtu_aktif;
+        }
+
+        if ($day === 7) {
+            return (bool) $shift->minggu_aktif;
+        }
+
+        return true;
     }
 
     protected function getKategoriLineageIds(int $kategoriId): array
@@ -188,141 +247,162 @@ class ProsesAbsensiCoreService
     }
 
     protected function buildShiftCandidate(string $tanggal, Collection $logs, KategoriShift $rule): ?array
-{
-    $shift = $rule->shiftMaster;
+    {
+        $shift = $rule->shiftMaster;
 
-    $shiftStart = Carbon::parse($tanggal . ' ' . $shift->jam_masuk);
-    $shiftEnd   = Carbon::parse($tanggal . ' ' . $shift->jam_pulang);
+        $shiftStart = Carbon::parse($tanggal . ' ' . $shift->jam_masuk);
+        $shiftEnd = Carbon::parse($tanggal . ' ' . $shift->jam_pulang);
 
-    $lintasHari = (bool) ($rule->lintas_hari ?? $shift->lintas_hari ?? false);
-    if ($lintasHari || $shiftEnd->lessThanOrEqualTo($shiftStart)) {
-        $shiftEnd->addDay();
-    }
+        $lintasHari = (bool) ($rule->lintas_hari ?? $shift->lintas_hari ?? false);
+        if ($lintasHari || $shiftEnd->lessThanOrEqualTo($shiftStart)) {
+            $shiftEnd->addDay();
+        }
 
-    $windowMasukBefore  = (int) ($rule->window_masuk_before_menit ?? 120);
-    $windowMasukAfter   = (int) ($rule->window_masuk_after_menit ?? 180);
-    $windowPulangBefore = (int) ($rule->window_pulang_before_menit ?? 240);
-    $windowPulangAfter  = (int) ($rule->window_pulang_after_menit ?? 240);
+        // sesuai migration kategori_shifts
+        $windowMasukMulai = (int) ($rule->window_masuk_mulai_menit ?? -120);
+        $windowMasukSelesai = (int) ($rule->window_masuk_selesai_menit ?? 180);
+        $windowPulangMulai = (int) ($rule->window_pulang_mulai_menit ?? -180);
+        $windowPulangSelesai = (int) ($rule->window_pulang_selesai_menit ?? 240);
 
-    $masukStart  = $shiftStart->copy()->subMinutes($windowMasukBefore);
-    $masukEnd    = $shiftStart->copy()->addMinutes($windowMasukAfter);
-    $pulangStart = $shiftEnd->copy()->subMinutes($windowPulangBefore);
-    $pulangEnd   = $shiftEnd->copy()->addMinutes($windowPulangAfter);
+        $masukStart = $shiftStart->copy()->addMinutes($windowMasukMulai);
+        $masukEnd = $shiftStart->copy()->addMinutes($windowMasukSelesai);
+        $pulangStart = $shiftEnd->copy()->addMinutes($windowPulangMulai);
+        $pulangEnd = $shiftEnd->copy()->addMinutes($windowPulangSelesai);
 
-    $masukLogs = $logs->filter(function ($log) use ($masukStart, $masukEnd) {
-        $scan = Carbon::parse($log->scan_time);
-        return $scan->between($masukStart, $masukEnd);
-    })->values();
+        $masukLogs = $logs->filter(function ($log) use ($masukStart, $masukEnd) {
+            $scan = Carbon::parse($log->scan_time);
+            return $scan->between($masukStart, $masukEnd);
+        })->values();
 
-    $pulangLogs = $logs->filter(function ($log) use ($pulangStart, $pulangEnd) {
-        $scan = Carbon::parse($log->scan_time);
-        return $scan->between($pulangStart, $pulangEnd);
-    })->values();
+        $pulangLogs = $logs->filter(function ($log) use ($pulangStart, $pulangEnd) {
+            $scan = Carbon::parse($log->scan_time);
+            return $scan->between($pulangStart, $pulangEnd);
+        })->values();
 
-    $allShiftLogs = $logs->filter(function ($log) use ($masukStart, $pulangEnd) {
-        $scan = Carbon::parse($log->scan_time);
-        return $scan->between($masukStart, $pulangEnd);
-    })->values();
+        $allShiftLogs = $logs->filter(function ($log) use ($masukStart, $pulangEnd) {
+            $scan = Carbon::parse($log->scan_time);
+            return $scan->between($masukStart, $pulangEnd);
+        })->values();
 
-    if ($allShiftLogs->isEmpty()) {
-        return null;
-    }
+        if ($allShiftLogs->isEmpty()) {
+            return null;
+        }
 
-    $jamMasuk = null;
-    $jamPulang = null;
-    $singleScanMode = null;
+        // hardening shift lintas hari:
+        // wajib ada jejak scan di tanggal anchor supaya scan pagi next-day
+        // tidak dicaplok jadi pulang hari sebelumnya
+        $anchorDate = Carbon::parse($tanggal)->toDateString();
 
-    // ===== Kasus scan tunggal: klasifikasi berdasar kedekatan masuk/pulang =====
-    if ($allShiftLogs->count() === 1) {
-        $singleLog = $allShiftLogs->first();
-        $singleScan = Carbon::parse($singleLog->scan_time);
+        if ($lintasHari) {
+            $hasAnchorDateLog = $allShiftLogs->contains(function ($log) use ($anchorDate) {
+                return Carbon::parse($log->scan_time)->toDateString() === $anchorDate;
+            });
 
-        $isInMasukWindow = $singleScan->between($masukStart, $masukEnd);
-        $isInPulangWindow = $singleScan->between($pulangStart, $pulangEnd);
+            if (! $hasAnchorDateLog) {
+                return null;
+            }
+        }
 
-        $diffToMasuk = abs($singleScan->diffInMinutes($shiftStart, false));
-        $diffToPulang = abs($singleScan->diffInMinutes($shiftEnd, false));
+        $jamMasuk = null;
+        $jamPulang = null;
+        $singleScanMode = null;
 
-        if ($isInMasukWindow && ! $isInPulangWindow) {
-            $jamMasuk = $singleLog;
-            $singleScanMode = 'masuk';
-        } elseif (! $isInMasukWindow && $isInPulangWindow) {
-            $jamPulang = $singleLog;
-            $singleScanMode = 'pulang';
-        } else {
-            if ($diffToMasuk <= $diffToPulang) {
+        // kasus scan tunggal
+        if ($allShiftLogs->count() === 1) {
+            $singleLog = $allShiftLogs->first();
+            $singleScan = Carbon::parse($singleLog->scan_time);
+
+            $isInMasukWindow = $singleScan->between($masukStart, $masukEnd);
+            $isInPulangWindow = $singleScan->between($pulangStart, $pulangEnd);
+
+            $diffToMasuk = abs($singleScan->diffInMinutes($shiftStart, false));
+            $diffToPulang = abs($singleScan->diffInMinutes($shiftEnd, false));
+
+            if ($isInMasukWindow && ! $isInPulangWindow) {
                 $jamMasuk = $singleLog;
                 $singleScanMode = 'masuk';
-            } else {
+            } elseif (! $isInMasukWindow && $isInPulangWindow) {
                 $jamPulang = $singleLog;
                 $singleScanMode = 'pulang';
+            } else {
+                if ($diffToMasuk <= $diffToPulang) {
+                    $jamMasuk = $singleLog;
+                    $singleScanMode = 'masuk';
+                } else {
+                    $jamPulang = $singleLog;
+                    $singleScanMode = 'pulang';
+                }
             }
-        }
-    } else {
-        // ===== Kasus scan lebih dari 1 =====
-        $jamMasuk = $masukLogs->first();
-        $jamPulang = $pulangLogs->last();
+        } else {
+            // kasus scan lebih dari 1
+            $jamMasuk = $masukLogs->first();
+            $jamPulang = $pulangLogs->last();
 
-        if (! $jamMasuk) {
-            $jamMasuk = $allShiftLogs->first();
-        }
-
-        if (! $jamPulang) {
-            $jamPulang = null;
-        }
-
-        if ($jamMasuk && $jamPulang) {
-            $masukTime = Carbon::parse($jamMasuk->scan_time);
-            $pulangTime = Carbon::parse($jamPulang->scan_time);
-
-            if ($masukTime->equalTo($pulangTime)) {
-                $jamPulang = null;
+            if (! $jamMasuk) {
+                $jamMasuk = $allShiftLogs->first();
             }
 
-            if ($jamPulang && Carbon::parse($jamPulang->scan_time)->lessThan(Carbon::parse($jamMasuk->scan_time))) {
-                $jamPulang = null;
+            // anti false pulang:
+            // jangan fallback jam pulang ke scan terakhir sembarang
+            // karena double scan saat masuk bisa salah dianggap pulang
+
+            if ($jamMasuk && $jamPulang) {
+                $masukTime = Carbon::parse($jamMasuk->scan_time);
+                $pulangTime = Carbon::parse($jamPulang->scan_time);
+
+                if ($masukTime->equalTo($pulangTime)) {
+                    $jamPulang = null;
+                }
+
+                if ($jamPulang && $pulangTime->lessThan($masukTime)) {
+                    $jamPulang = null;
+                }
             }
         }
-    }
 
-    if (! $jamMasuk && ! $jamPulang) {
-        return null;
-    }
+        if (! $jamMasuk && ! $jamPulang) {
+            return null;
+        }
 
-    $score = 0;
-    if ($masukLogs->isNotEmpty()) {
-        $score += 50;
-    }
-    if ($pulangLogs->isNotEmpty()) {
-        $score += 40;
-    }
-    if ($allShiftLogs->isNotEmpty()) {
-        $score += min($allShiftLogs->count(), 10);
-    }
-    if ($rule->is_default) {
-        $score += 3;
-    }
+        $score = 0;
 
-    return [
-        'rule' => $rule,
-        'shift' => $shift,
-        'shift_start' => $shiftStart,
-        'shift_end' => $shiftEnd,
-        'jam_masuk_log' => $jamMasuk,
-        'jam_pulang_log' => $jamPulang,
-        'matched_logs' => $allShiftLogs,
-        'matched_scan_count' => $allShiftLogs->count(),
-        'score' => $score,
-        'single_scan_mode' => $singleScanMode,
-    ];
-}
+        if ($masukLogs->isNotEmpty()) {
+            $score += 50;
+        }
+
+        if ($pulangLogs->isNotEmpty()) {
+            $score += 40;
+        }
+
+        if ($allShiftLogs->isNotEmpty()) {
+            $score += min($allShiftLogs->count(), 10);
+        }
+
+        if ($rule->is_default) {
+            $score += 3;
+        }
+
+        return [
+            'rule' => $rule,
+            'shift' => $shift,
+            'shift_start' => $shiftStart,
+            'shift_end' => $shiftEnd,
+            'jam_masuk_log' => $jamMasuk,
+            'jam_pulang_log' => $jamPulang,
+            'matched_logs' => $allShiftLogs,
+            'matched_scan_count' => $allShiftLogs->count(),
+            'score' => $score,
+            'single_scan_mode' => $singleScanMode,
+        ];
+    }
 
     protected function upsertAbsensi(
         Karyawan $karyawan,
         string $tanggal,
         ?array $bestMatch,
         Collection $logs,
-        ?AbsensiHarian $existing = null
+        ?AbsensiHarian $existing = null,
+        ?string $forcedKeterangan = null
     ): void {
         $data = [
             'tanggal' => $tanggal,
@@ -361,32 +441,39 @@ class ProsesAbsensiCoreService
             $shiftEnd = $bestMatch['shift_end'];
 
             $toleransiTelat = (int) ($rule->toleransi_telat_menit ?? 0);
-
             $singleScanMode = $bestMatch['single_scan_mode'] ?? null;
 
-$menitTelat = 0;
-$statusTelat = false;
+            $menitTelat = 0;
+            $statusTelat = false;
 
-if ($jamMasuk && $singleScanMode !== 'pulang') {
-    if ($jamMasuk->greaterThan($shiftStart->copy()->addMinutes($toleransiTelat))) {
-        $menitTelat = $shiftStart->diffInMinutes($jamMasuk);
-        $statusTelat = true;
-    }
-}
+            if ($jamMasuk && $singleScanMode !== 'pulang') {
+                if ($jamMasuk->greaterThan($shiftStart->copy()->addMinutes($toleransiTelat))) {
+                    $menitTelat = $shiftStart->diffInMinutes($jamMasuk);
+                    $statusTelat = true;
+                }
+            }
 
-$menitLembur = 0;
-$statusLembur = false;
+            $menitLembur = 0;
+            $statusLembur = false;
 
-if ($jamPulang && $singleScanMode !== 'masuk') {
-    if ($jamPulang->greaterThan($shiftEnd)) {
-        $menitLembur = $shiftEnd->diffInMinutes($jamPulang);
-        $statusLembur = $menitLembur > 0;
-    }
-}
+            if ($jamPulang && $singleScanMode !== 'masuk') {
+                if ($jamPulang->greaterThan($shiftEnd)) {
+                    $menitLembur = $shiftEnd->diffInMinutes($jamPulang);
+                    $statusLembur = $menitLembur > 0;
+                }
+            }
 
             $totalMenitKerja = 0;
+
             if ($jamMasuk && $jamPulang && $jamPulang->greaterThan($jamMasuk)) {
                 $totalMenitKerja = $jamMasuk->diffInMinutes($jamPulang);
+
+                if ((bool) ($rule->istirahat_aktif ?? false) && (bool) ($rule->istirahat_otomatis_potong ?? false)) {
+                    $totalMenitKerja = max(
+                        0,
+                        $totalMenitKerja - (int) ($rule->menit_istirahat_default ?? 0)
+                    );
+                }
             }
 
             $data = array_merge($data, [
@@ -408,7 +495,7 @@ if ($jamPulang && $singleScanMode !== 'masuk') {
                 'keterangan' => $this->buildKeterangan($bestMatch, $jamMasuk, $jamPulang),
             ]);
         } else {
-            $data['keterangan'] = 'Tidak ditemukan rule shift yang cocok dari scan yang tersedia.';
+            $data['keterangan'] = $forcedKeterangan ?: 'Tidak ditemukan rule shift yang cocok dari scan yang tersedia.';
         }
 
         if ($existing) {
@@ -426,28 +513,28 @@ if ($jamPulang && $singleScanMode !== 'masuk') {
     }
 
     protected function buildKeterangan(array $bestMatch, ?Carbon $jamMasuk, ?Carbon $jamPulang): string
-{
-    $rule = $bestMatch['rule'];
-    $shift = $bestMatch['shift'];
+    {
+        $rule = $bestMatch['rule'];
+        $shift = $bestMatch['shift'];
 
-    $parts = [];
-    $parts[] = 'Rule: ' . ($rule->nama_rule ?? ('Shift ' . $shift->nama));
-    $parts[] = 'Shift: ' . $shift->nama;
+        $parts = [];
+        $parts[] = 'Rule: ' . ($rule->nama_rule ?? ('Shift ' . $shift->nama));
+        $parts[] = 'Shift: ' . $shift->nama;
 
-    if (!empty($bestMatch['single_scan_mode'])) {
-        $parts[] = 'Scan tunggal diklasifikasikan sebagai: ' . strtoupper($bestMatch['single_scan_mode']);
+        if (! empty($bestMatch['single_scan_mode'])) {
+            $parts[] = 'Scan tunggal diklasifikasikan sebagai: ' . strtoupper($bestMatch['single_scan_mode']);
+        }
+
+        if ($jamMasuk) {
+            $parts[] = 'Masuk: ' . $jamMasuk->format('d-m-Y H:i:s');
+        }
+
+        if ($jamPulang) {
+            $parts[] = 'Pulang: ' . $jamPulang->format('d-m-Y H:i:s');
+        }
+
+        $parts[] = 'Scan cocok: ' . $bestMatch['matched_logs']->count();
+
+        return implode(' | ', $parts);
     }
-
-    if ($jamMasuk) {
-        $parts[] = 'Masuk: ' . $jamMasuk->format('d-m-Y H:i:s');
-    }
-
-    if ($jamPulang) {
-        $parts[] = 'Pulang: ' . $jamPulang->format('d-m-Y H:i:s');
-    }
-
-    $parts[] = 'Scan cocok: ' . $bestMatch['matched_logs']->count();
-
-    return implode(' | ', $parts);
-}
 }

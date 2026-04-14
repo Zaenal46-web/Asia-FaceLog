@@ -28,6 +28,9 @@ class ExportController extends Controller
 
         $query = AbsensiHarian::query()
             ->with(['karyawan.kategoriKaryawan.parent', 'device', 'shiftMaster'])
+            ->whereHas('karyawan', function ($q) {
+                $q->whereNotNull('kategori_karyawan_id');
+            })
             ->whereBetween('tanggal', [$tanggalMulai, $tanggalSelesai])
             ->when($deviceId, fn ($q) => $q->where('device_id', $deviceId))
             ->when($shiftId, fn ($q) => $q->where('shift_master_id', $shiftId))
@@ -50,8 +53,11 @@ class ExportController extends Controller
             })
             ->when($search !== '', function ($q) use ($search) {
                 $q->whereHas('karyawan', function ($sub) use ($search) {
-                    $sub->where('nama', 'like', "%{$search}%")
-                        ->orWhere('pin_fingerspot', 'like', "%{$search}%");
+                    $sub->whereNotNull('kategori_karyawan_id')
+                        ->where(function ($qq) use ($search) {
+                            $qq->where('nama', 'like', "%{$search}%")
+                               ->orWhere('pin_fingerspot', 'like', "%{$search}%");
+                        });
                 });
             })
             ->orderBy('tanggal')
@@ -63,6 +69,9 @@ class ExportController extends Controller
         $shiftOptions = ShiftMaster::query()->orderBy('nama')->get();
 
         $summaryBase = AbsensiHarian::query()
+            ->whereHas('karyawan', function ($q) {
+                $q->whereNotNull('kategori_karyawan_id');
+            })
             ->whereBetween('tanggal', [$tanggalMulai, $tanggalSelesai])
             ->when($deviceId, fn ($q) => $q->where('device_id', $deviceId))
             ->when($shiftId, fn ($q) => $q->where('shift_master_id', $shiftId));
@@ -103,6 +112,9 @@ class ExportController extends Controller
 
         $rows = AbsensiHarian::query()
             ->with(['karyawan.kategoriKaryawan.parent', 'device', 'shiftMaster'])
+            ->whereHas('karyawan', function ($q) {
+                $q->whereNotNull('kategori_karyawan_id');
+            })
             ->whereBetween('tanggal', [$tanggalMulai, $tanggalSelesai])
             ->when($deviceId, fn ($q) => $q->where('device_id', $deviceId))
             ->when($shiftId, fn ($q) => $q->where('shift_master_id', $shiftId))
@@ -125,8 +137,11 @@ class ExportController extends Controller
             })
             ->when($search !== '', function ($q) use ($search) {
                 $q->whereHas('karyawan', function ($sub) use ($search) {
-                    $sub->where('nama', 'like', "%{$search}%")
-                        ->orWhere('pin_fingerspot', 'like', "%{$search}%");
+                    $sub->whereNotNull('kategori_karyawan_id')
+                        ->where(function ($qq) use ($search) {
+                            $qq->where('nama', 'like', "%{$search}%")
+                               ->orWhere('pin_fingerspot', 'like', "%{$search}%");
+                        });
                 });
             })
             ->orderBy('tanggal')
@@ -139,7 +154,6 @@ class ExportController extends Controller
 
         $lastColumn = 'R';
 
-        // Title
         $sheetExcel->mergeCells("A1:{$lastColumn}1");
         $sheetExcel->setCellValue('A1', 'LAPORAN EXPORT ABSENSI FACELOG V2');
         $sheetExcel->getStyle('A1')->applyFromArray([
@@ -159,7 +173,6 @@ class ExportController extends Controller
         ]);
         $sheetExcel->getRowDimension(1)->setRowHeight(28);
 
-        // Metadata
         $meta = [
             ['Periode', Carbon::parse($tanggalMulai)->format('d-m-Y') . ' s/d ' . Carbon::parse($tanggalSelesai)->format('d-m-Y')],
             ['Device', $device?->nama ?? 'Semua Device'],
@@ -180,7 +193,6 @@ class ExportController extends Controller
             'font' => ['bold' => true, 'color' => ['rgb' => '1E3A8A']],
         ]);
 
-        // Table Header
         $headerRow = 11;
         $headers = [
             'No',
@@ -230,7 +242,6 @@ class ExportController extends Controller
         ]);
         $sheetExcel->getRowDimension($headerRow)->setRowHeight(22);
 
-        // Data
         $rowNum = $headerRow + 1;
         foreach ($rows as $index => $item) {
             $sheetExcel->setCellValue("A{$rowNum}", $index + 1);
@@ -257,7 +268,6 @@ class ExportController extends Controller
 
         $lastDataRow = max($headerRow + 1, $rowNum - 1);
 
-        // Borders + alignment
         $sheetExcel->getStyle("A{$headerRow}:{$lastColumn}{$lastDataRow}")->applyFromArray([
             'borders' => [
                 'allBorders' => [
@@ -270,7 +280,6 @@ class ExportController extends Controller
             ],
         ]);
 
-        // Zebra rows
         for ($r = $headerRow + 1; $r <= $lastDataRow; $r++) {
             if ($r % 2 === 0) {
                 $sheetExcel->getStyle("A{$r}:{$lastColumn}{$r}")->getFill()
@@ -279,16 +288,13 @@ class ExportController extends Controller
             }
         }
 
-        // Wrap text untuk kolom teks panjang
-        $sheetExcel->getStyle("C" . ($headerRow + 1) . ":R{$lastDataRow}")->getAlignment()->setWrapText(true);
+        $sheetExcel->getStyle("C" . ($headerRow + 1) . ":R{$lastDataRow}")
+            ->getAlignment()
+            ->setWrapText(true);
 
-        // Freeze pane
         $sheetExcel->freezePane('A12');
-
-        // Auto filter
         $sheetExcel->setAutoFilter("A{$headerRow}:{$lastColumn}{$lastDataRow}");
 
-        // Width
         $widths = [
             'A' => 6,
             'B' => 14,
@@ -314,8 +320,6 @@ class ExportController extends Controller
             $sheetExcel->getColumnDimension($col)->setWidth($width);
         }
 
-        // Summary kecil
-        $summaryStart = "T3";
         $sheetExcel->setCellValue('T3', 'Ringkasan');
         $sheetExcel->setCellValue('T4', 'Total Data');
         $sheetExcel->setCellValue('U4', $rows->count());
