@@ -251,6 +251,7 @@ class FingerUserController extends Controller
 
         $karyawan = Karyawan::query()
             ->where('pin_fingerspot', $pin)
+            ->where('device_id', $userMesin->device_id)
             ->first();
 
         if (! $karyawan) {
@@ -288,7 +289,7 @@ class FingerUserController extends Controller
             return back()->with('success', 'Master karyawan sudah ada, data kosong berhasil dilengkapi dari user mesin.');
         }
 
-        return back()->with('success', 'Master karyawan dengan PIN ini sudah ada, tidak ada perubahan yang diperlukan.');
+        return back()->with('success', 'Master karyawan device + PIN ini sudah ada, tidak ada perubahan yang diperlukan.');
     }
 
     public function syncMassalToKaryawan()
@@ -312,6 +313,7 @@ class FingerUserController extends Controller
 
             $sudahAda = Karyawan::query()
                 ->where('pin_fingerspot', $pin)
+                ->where('device_id', $userMesin->device_id)
                 ->exists();
 
             if ($sudahAda) {
@@ -431,6 +433,7 @@ class FingerUserController extends Controller
             if ((bool) ($validated['update_master_karyawan'] ?? false)) {
                 Karyawan::query()
                     ->where('pin_fingerspot', $userMesin->pin)
+                    ->where('device_id', $deviceAsal->id)
                     ->update([
                         'device_id' => $deviceTujuan->id,
                         'pin_fingerspot' => $pinTujuan,

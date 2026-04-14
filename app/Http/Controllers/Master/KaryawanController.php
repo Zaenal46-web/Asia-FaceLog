@@ -228,7 +228,11 @@ class KaryawanController extends Controller
                 'nullable',
                 'string',
                 'max:255',
-                Rule::unique('karyawans', 'pin_fingerspot')->ignore($ignoreId),
+                Rule::unique('karyawans')
+                    ->where(function ($q) use ($request) {
+                        return $q->where('device_id', $request->device_id);
+                    })
+                    ->ignore($ignoreId),
             ],
             'kategori_karyawan_id' => ['nullable', 'exists:kategori_karyawans,id'],
             'device_id' => ['nullable', 'exists:fingerspot_devices,id'],
@@ -251,13 +255,13 @@ class KaryawanController extends Controller
     }
 
     protected function nullableTrim(?string $value): ?string
-    {
-        if ($value === null) {
-            return null;
-        }
-
-        $value = trim($value);
-
-        return $value === '' ? null : $value;
+{
+    if ($value === null) {
+        return null;
     }
+
+    $value = trim($value);
+
+    return $value === '' ? null : $value;
+}
 }
